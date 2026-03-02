@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Multi-Env Chat Scraper v8.1 (Secured)
-// @version      8.1.1
-// @description  chat scraper and upload the data to sharepoint after assesment
+// @version      8.1.2
+// @description  chat scraper and upload the data to sharepoint after assessment
 // @author       bsv
 // @match        https://pre-prod.amazon.com/*
 // @match        https://www.amazon.com/*
@@ -342,7 +342,6 @@
             email: truncateString(d.email || '', 255),
             customerId: truncateString(d.customerId || '', 255),
             gcsLink: truncateString(d.gcsLink || '', 500),
-            // ★ NEW: Save the selected GCS/MCS type
             gcsLinkType: truncateString(d.gcsLinkType || '', 255)
         };
         savedTestAccount = safe;
@@ -577,7 +576,8 @@
                 groundTruth: ['GroundTruth', 'Ground_Truth', 'Ground Truth'],
                 observations: ['Observations', 'observations', 'Notes'],
                 areaOfImprovement: ['Area_of_Improvement', 'AreaOfImprovement', 'Area of Improvement'],
-                gcsLink: ['GCS_Link', 'GCSLink', 'GCS Link'],
+                gcsLinkType: ['GCS_MCS_Type', 'GCSMCSType', 'GCS MCS Type', 'Link_Type', 'LinkType'],
+                gcsLink: ['GCS_MCS_Link', 'GCSLink', 'GCS Link'],
                 testEmail: ['Test_Email', 'TestEmail', 'Test Email'],
                 testCustomerId: ['Test_Customer_Id', 'TestCustomerId', 'Test Customer Id'],
                 testingDate: ['Testing_Date', 'TestingDate', 'Testing Date'],
@@ -741,7 +741,8 @@
                 { name: 'HVA', type: 2 }, { name: 'Message_Id', type: 2 }, { name: 'Conversation_Id', type: 2 },
                 { name: 'Query', type: 3 }, { name: 'BotResponse', type: 3 }, { name: 'Response_Time', type: 2 },
                 { name: 'Status', type: 2 }, { name: 'GroundTruth', type: 3 }, { name: 'Observations', type: 3 },
-                { name: 'GCS_Link', type: 2 }, { name: 'Test_Email', type: 2 }, { name: 'Test_Customer_Id', type: 2 },
+                { name: 'GCS_MCS_Type', type: 2 },
+                { name: 'GCS_MCS_Link', type: 2 }, { name: 'Test_Email', type: 2 }, { name: 'Test_Customer_Id', type: 2 },
                 { name: 'Testing_Date', type: 2 }, { name: 'Tester_Login', type: 2 }, { name: 'Query_Timestamp', type: 2 },
                 { name: 'Saved_Timestamp', type: 2 }, { name: 'Screenshot', type: 11 }
             ];
@@ -825,6 +826,7 @@
             af('conversationId', truncateString(entryData.conversationId, 255));
             af('responseTime', truncateString(entryData.responseTimeFormatted, 255));
             af('status', truncateString(entryData.responseCorrectOrIncorrect, 255));
+            af('gcsLinkType', truncateString(entryData.gcsLinkType, 255));
             af('gcsLink', truncateString(entryData.gcsLink, 255));
             af('testEmail', truncateString(entryData.testAccountEmail, 255));
             af('testCustomerId', truncateString(entryData.testAccountCustomerId, 255));
@@ -858,8 +860,9 @@
             return { ...result, image: imgRes };
         }
     };
+
     // ════════════════════════════════════════════════════════
-    //  AUTO-UPLOAD ENGINE (SECURED)
+    //  AUTO-UPLOAD ENGINE
     // ════════════════════════════════════════════════════════
     let autoUploadInProgress = false;
     let autoUploadRetryQueue = [];
@@ -889,9 +892,7 @@
         if (!ind) {
             ind = document.createElement('div');
             ind.id = 'autoUploadIndicator';
-            ind.style.cssText = `position:fixed;bottom:70px;right:20px;padding:10px 18px;border-radius:8px;
-                font-family:Arial;font-size:12px;z-index:200001;box-shadow:0 4px 15px rgba(0,0,0,0.3);
-                transition:all 0.3s ease;max-width:420px;display:flex;align-items:center;gap:8px;`;
+            ind.style.cssText = `position:fixed;bottom:70px;right:20px;padding:10px 18px;border-radius:8px;font-family:Arial;font-size:12px;z-index:200001;box-shadow:0 4px 15px rgba(0,0,0,0.3);transition:all 0.3s ease;max-width:420px;display:flex;align-items:center;gap:8px;`;
             document.body.appendChild(ind);
         }
         const styles = {
@@ -911,7 +912,7 @@
         msgSpan.textContent = `[${getActiveEnv().shortLabel}] ${message}`;
         ind.appendChild(iconSpan);
         ind.appendChild(msgSpan);
-        ind.style.opacity = '1';
+               ind.style.opacity = '1';
         if (type !== 'uploading' && type !== 'retry') {
             setTimeout(() => {
                 if (ind) { ind.style.opacity = '0'; setTimeout(() => { try { ind.remove(); } catch {} }, 300); }
@@ -1125,56 +1126,51 @@
     const formatResponseTime = ms => ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
     const debounce = (fn, d) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), d); }; };
 
-   const HVA_OPTIONS = [
-    'Select HVA...',
-    // Original options
-    '3WM (3-way match)',
-    'ATEP (Amazon Tax Exemption Program)',
-    'Account authority',
-    'Add User',
-    'Business Lists',
-    'Business Order Information',
-    'Custom Quotes',
-    'Business Prime',
-    'Guided Buying',
-    'PBI',
-    'Quantity Discount',
-    'Recurring Delivery',
-    'SSO',
-    'Shared Settings',
-    // ★ NEW: Additional HVA options
-    'Services',
-    'UNSPSC',
-    'Amazon Business Payments',
-    'Your orders',
-    'Budget Management',
-    'Business Giving',
-    'Business Pricing',
-    'Business Pricing - Lightning Deals',
-    'Business Pricing - Promotions',
-    'Business Pricing - Pre order price',
-    'Business Pricing - Custom Quotes',
-    'Business Pricing - Bulk Buying',
-    'Business Pricing - Industry Vertical Pricing',
-    'Business Pricing - Negotiated Prices',
-    'Spend Anomaly Monitoring',
-    'Approvals',
-    'AB Registration',
-    'AB Search',
-    'AB Cart',
-    'Socially Responsible Purchasing',
-    'AB App Center',
-    // Keep these at the bottom
-    'None of the above',
-    'Custom'
-];
+    const HVA_OPTIONS = [
+        'Select HVA...',
+        '3WM (3-way match)', 'ATEP (Amazon Tax Exemption Program)', 'Account authority',
+        'Add User', 'Business Lists', 'Business Order Information', 'Custom Quotes',
+        'Business Prime', 'Guided Buying', 'PBI', 'Quantity Discount', 'Recurring Delivery',
+        'SSO', 'Shared Settings', 'Services', 'UNSPSC', 'Amazon Business Payments',
+        'Your orders', 'Budget Management', 'Business Giving', 'Business Pricing',
+        'Business Pricing - Lightning Deals', 'Business Pricing - Promotions',
+        'Business Pricing - Pre order price', 'Business Pricing - Custom Quotes',
+        'Business Pricing - Bulk Buying', 'Business Pricing - Industry Vertical Pricing',
+        'Business Pricing - Negotiated Prices', 'Spend Anomaly Monitoring', 'Approvals',
+        'AB Registration', 'AB Search', 'AB Cart', 'Socially Responsible Purchasing',
+        'AB App Center', 'None of the above', 'Custom'
+    ];
 
-  // ★ GCS/MCS Link options — simplified to just GCS or MCS
-const GCS_MCS_OPTIONS = [
-    { value: '', label: 'Select Link Type...' },
-    { value: 'gcs', label: 'GCS ' },
-    { value: 'mcs', label: 'MCS ' },
-];
+    const GCS_MCS_OPTIONS = [
+        { value: '', label: 'Select Link Type...' },
+        { value: 'gcs', label: 'GCS' },
+        { value: 'mcs', label: 'MCS' },
+    ];
+
+    // ════════════════════════════════════════════════════════
+    //  GCS/MCS HELPERS — SEPARATED TYPE AND URL
+    // ════════════════════════════════════════════════════════
+
+    /** Returns ONLY the URL (no type prefix) */
+    function getGcsLinkFromSelector(containerId, inputId, selectId) {
+        const input = document.getElementById(inputId);
+        return input ? input.value.trim() : '';
+    }
+
+    /** Returns ONLY the type label: "GCS", "MCS", or custom text */
+    function getGcsLinkTypeLabel(selectId, containerId) {
+        const select = document.getElementById(selectId);
+        if (!select || !select.value) return '';
+        const val = select.value;
+        if (val === 'gcs') return 'GCS';
+        if (val === 'mcs') return 'MCS';
+        if (val === 'custom') {
+            const customInput = document.getElementById(`${containerId}_customType`);
+            return customInput && customInput.value.trim() ? customInput.value.trim() : 'Custom';
+        }
+        const opt = GCS_MCS_OPTIONS.find(o => o.value === val);
+        return opt ? opt.label.trim() : val;
+    }
 
     // ════════════════════════════════════════════════════════
     //  QUEUE
@@ -1335,7 +1331,7 @@ const GCS_MCS_OPTIONS = [
     }
 
     // ════════════════════════════════════════════════════════
-    //  ★ GCS/MCS LINK SELECTOR BUILDER (Reusable)
+    //  GCS/MCS LINK SELECTOR BUILDER
     // ════════════════════════════════════════════════════════
     function buildGcsLinkSelector(containerId, inputId, selectId, currentValue, currentType) {
         const wrapper = document.createElement('div');
@@ -1347,11 +1343,9 @@ const GCS_MCS_OPTIONS = [
         label.textContent = 'GCS/MCS Link:';
         wrapper.appendChild(label);
 
-        // ★ Selector dropdown
         const select = document.createElement('select');
         select.id = selectId;
-        select.style.cssText = `width:100%;padding:8px;border:2px solid #17a2b8;border-radius:6px;
-            margin-top:5px;font-size:11px;background:#f0fbff;cursor:pointer;box-sizing:border-box`;
+        select.style.cssText = `width:100%;padding:8px;border:2px solid #17a2b8;border-radius:6px;margin-top:5px;font-size:11px;background:#f0fbff;cursor:pointer;box-sizing:border-box`;
 
         GCS_MCS_OPTIONS.forEach(opt => {
             const option = document.createElement('option');
@@ -1362,7 +1356,6 @@ const GCS_MCS_OPTIONS = [
         });
         wrapper.appendChild(select);
 
-        // ★ URL text input (shown always for entering actual link)
         const urlInput = document.createElement('input');
         urlInput.type = 'text';
         urlInput.id = inputId;
@@ -1370,110 +1363,41 @@ const GCS_MCS_OPTIONS = [
         urlInput.value = currentValue || '';
         urlInput.setAttribute('maxlength', '500');
         urlInput.setAttribute('autocomplete', 'off');
-        urlInput.style.cssText = `width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;
-            font-size:11px;box-sizing:border-box;margin-top:6px`;
+        urlInput.style.cssText = `width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:11px;box-sizing:border-box;margin-top:6px`;
         wrapper.appendChild(urlInput);
 
-        // ★ Custom URL extra input (only shown when "Custom URL..." is selected)
-        const customUrlWrap = document.createElement('div');
-        customUrlWrap.id = `${containerId}_customWrap`;
-        customUrlWrap.style.cssText = `display:none;margin-top:6px`;
-
-        const customLabel = document.createElement('label');
-        customLabel.style.cssText = `font-size:10px;color:#6c757d;font-weight:normal`;
-        customLabel.textContent = 'Custom link type description:';
-        customUrlWrap.appendChild(customLabel);
-
-        const customInput = document.createElement('input');
-        customInput.type = 'text';
-        customInput.id = `${containerId}_customType`;
-        customInput.placeholder = 'e.g., Internal Tool, Jira Ticket...';
-        customInput.setAttribute('maxlength', '255');
-        customInput.style.cssText = `width:100%;padding:6px;border:1px solid #fd7e14;border-radius:4px;
-            font-size:11px;box-sizing:border-box;margin-top:3px;background:#fff8f0`;
-        customUrlWrap.appendChild(customInput);
-        wrapper.appendChild(customUrlWrap);
-
-        // ★ Type indicator badge
         const badge = document.createElement('div');
         badge.id = `${containerId}_badge`;
-        badge.style.cssText = `display:none;margin-top:4px;padding:3px 8px;border-radius:4px;
-            font-size:9px;font-weight:bold;display:inline-block`;
+        badge.style.cssText = `display:none;margin-top:4px;padding:3px 8px;border-radius:4px;font-size:9px;font-weight:bold`;
         wrapper.appendChild(badge);
 
-        // ★ Wire up select change
         select.addEventListener('change', () => {
             const val = select.value;
-            if (val === 'custom') {
-                customUrlWrap.style.display = 'block';
-                urlInput.placeholder = 'Paste your custom link here...';
-            } else {
-                customUrlWrap.style.display = 'none';
-                urlInput.placeholder = 'Paste GCS/MCS link here...';
-            }
-
-            // Update badge
-            if (val && val !== 'custom') {
-                const opt = GCS_MCS_OPTIONS.find(o => o.value === val);
-                badge.textContent = opt ? opt.label : val;
-                badge.style.display = 'inline-block';
-                if (val.startsWith('gcs')) {
-                    badge.style.background = '#d4edda'; badge.style.color = '#155724';
-                } else if (val.startsWith('mcs')) {
-                    badge.style.background = '#cce5ff'; badge.style.color = '#004085';
-                } else {
-                    badge.style.background = '#e2e3e5'; badge.style.color = '#383d41';
-                }
-            } else if (val === 'custom') {
-                badge.textContent = '🔗 Custom Link'; badge.style.display = 'inline-block';
-                badge.style.background = '#fff3cd'; badge.style.color = '#856404';
+            if (val === 'gcs') {
+                badge.textContent = 'GCS'; badge.style.display = 'inline-block';
+                badge.style.background = '#d4edda'; badge.style.color = '#155724';
+            } else if (val === 'mcs') {
+                badge.textContent = 'MCS'; badge.style.display = 'inline-block';
+                badge.style.background = '#cce5ff'; badge.style.color = '#004085';
             } else {
                 badge.style.display = 'none';
             }
         });
 
-        // ★ Trigger initial state if there's a saved type
-        if (currentType === 'custom') {
-            customUrlWrap.style.display = 'block';
-            urlInput.placeholder = 'Paste your custom link here...';
-            badge.textContent = '🔗 Custom Link'; badge.style.display = 'inline-block';
-            badge.style.background = '#fff3cd'; badge.style.color = '#856404';
-        } else if (currentType) {
-            const opt = GCS_MCS_OPTIONS.find(o => o.value === currentType);
-            if (opt) {
-                badge.textContent = opt.label; badge.style.display = 'inline-block';
-                if (currentType.startsWith('gcs')) { badge.style.background = '#d4edda'; badge.style.color = '#155724'; }
-                else if (currentType.startsWith('mcs')) { badge.style.background = '#cce5ff'; badge.style.color = '#004085'; }
-                else { badge.style.background = '#e2e3e5'; badge.style.color = '#383d41'; }
-            }
+        // Trigger initial state
+        if (currentType === 'gcs') {
+            badge.textContent = 'GCS'; badge.style.display = 'inline-block';
+            badge.style.background = '#d4edda'; badge.style.color = '#155724';
+        } else if (currentType === 'mcs') {
+            badge.textContent = 'MCS'; badge.style.display = 'inline-block';
+            badge.style.background = '#cce5ff'; badge.style.color = '#004085';
         }
 
         return wrapper;
     }
 
-    /** ★ Helper: get resolved GCS link value from a selector */
-    function getGcsLinkFromSelector(containerId, inputId, selectId) {
-        const select = document.getElementById(selectId);
-        const input = document.getElementById(inputId);
-        const customTypeInput = document.getElementById(`${containerId}_customType`);
-
-        const linkUrl = input ? input.value.trim() : '';
-        const linkType = select ? select.value : '';
-        const customDesc = customTypeInput ? customTypeInput.value.trim() : '';
-
-        // Build a descriptive link string
-        if (linkType === 'custom' && customDesc) {
-            return linkUrl ? `[${customDesc}] ${linkUrl}` : customDesc;
-        } else if (linkType && linkUrl) {
-            const opt = GCS_MCS_OPTIONS.find(o => o.value === linkType);
-            const typeLabel = opt ? opt.label : linkType;
-            return `[${typeLabel}] ${linkUrl}`;
-        }
-        return linkUrl;
-    }
-
     // ════════════════════════════════════════════════════════
-    //  ★ CUSTOM HVA INPUT BUILDER (Reusable)
+    //  CUSTOM HVA INPUT BUILDER
     // ════════════════════════════════════════════════════════
     function buildHvaSelector(selectId, customInputId) {
         const wrapper = document.createElement('div');
@@ -1498,7 +1422,6 @@ const GCS_MCS_OPTIONS = [
         });
         wrapper.appendChild(select);
 
-        // ★ Custom HVA text input — hidden by default
         const customWrap = document.createElement('div');
         customWrap.id = `${customInputId}_wrap`;
         customWrap.style.cssText = `display:none;margin-top:8px`;
@@ -1514,24 +1437,19 @@ const GCS_MCS_OPTIONS = [
         customInput.placeholder = 'Type your custom HVA here...';
         customInput.setAttribute('maxlength', '255');
         customInput.setAttribute('autocomplete', 'off');
-        customInput.style.cssText = `width:100%;padding:10px;border:2px solid #fd7e14;border-radius:6px;
-            font-size:12px;box-sizing:border-box;margin-top:4px;background:#fff8f0;
-            transition:border-color 0.2s`;
+        customInput.style.cssText = `width:100%;padding:10px;border:2px solid #fd7e14;border-radius:6px;font-size:12px;box-sizing:border-box;margin-top:4px;background:#fff8f0;transition:border-color 0.2s`;
         customWrap.appendChild(customInput);
 
         const hint = document.createElement('div');
         hint.style.cssText = `font-size:9px;color:#856404;margin-top:3px`;
         hint.textContent = 'This will be used as the HVA value for this entry';
         customWrap.appendChild(hint);
-
         wrapper.appendChild(customWrap);
 
-        // ★ Wire up toggle
         select.addEventListener('change', () => {
             if (select.value === 'Custom') {
                 customWrap.style.display = 'block';
                 customInput.focus();
-                // Change select border to indicate custom mode
                 select.style.borderColor = '#fd7e14';
                 select.style.background = '#fff8f0';
             } else {
@@ -1545,7 +1463,6 @@ const GCS_MCS_OPTIONS = [
         return wrapper;
     }
 
-    /** ★ Helper: get resolved HVA value */
     function getHvaValue(selectId, customInputId) {
         const select = document.getElementById(selectId);
         const customInput = document.getElementById(customInputId);
@@ -1603,7 +1520,6 @@ const GCS_MCS_OPTIONS = [
         `;
         panel.appendChild(style);
 
-        // Header
         const header = document.createElement('div');
         header.id = 'panelHeader';
         header.style.cssText = `background:${env.headerGradient};color:#fff;padding:10px 12px;border-radius:8px 8px 0 0;display:flex;align-items:center;justify-content:space-between;font-weight:bold;font-size:13px;cursor:move`;
@@ -1617,13 +1533,11 @@ const GCS_MCS_OPTIONS = [
         const content = document.createElement('div'); content.id = 'panelContent'; content.style.padding = '12px';
         content.appendChild(buildEnvSwitcherHTML());
 
-        // Env indicator
         const envInd = document.createElement('div');
         envInd.style.cssText = `padding:6px 10px;margin-bottom:10px;background:${env.color}15;color:${env.color};border:1px solid ${env.color}40;border-radius:6px;font-size:11px;text-align:center;font-weight:bold`;
         envInd.textContent = `📍 ${env.label}`;
         content.appendChild(envInd);
 
-        // User display
         const userDiv = document.createElement('div');
         userDiv.style.cssText = `padding:6px 10px;margin-bottom:10px;background:#e3f2fd;color:#1565c0;border-radius:6px;font-size:11px;display:flex;align-items:center;justify-content:space-between`;
         const userSpan = document.createElement('span'); userSpan.textContent = 'User: ';
@@ -1633,7 +1547,6 @@ const GCS_MCS_OPTIONS = [
         changeBtn.style.cssText = `background:none;border:none;color:#1565c0;cursor:pointer;font-size:10px;text-decoration:underline`; changeBtn.textContent = 'Change';
         userDiv.appendChild(userSpan); userDiv.appendChild(changeBtn); content.appendChild(userDiv);
 
-        // Bot response indicator
         const botInd = document.createElement('div'); botInd.id = 'botResponseIndicator';
         botInd.style.cssText = `display:none;padding:8px;margin-bottom:10px;background:#d4edda;color:#155724;border-radius:6px;font-size:11px;text-align:center`;
         const botLabel = document.createElement('div'); botLabel.style.fontWeight = 'bold'; botLabel.textContent = 'Bot response detected!';
@@ -1698,7 +1611,7 @@ const GCS_MCS_OPTIONS = [
     }
 
     // ════════════════════════════════════════════════════════
-    //  ★ TEST ACCOUNT SETTINGS (with GCS/MCS Selector)
+    //  TEST ACCOUNT SETTINGS
     // ════════════════════════════════════════════════════════
     function openTestAccountSettings() {
         const modal = document.createElement('div');
@@ -1725,19 +1638,15 @@ const GCS_MCS_OPTIONS = [
         body.appendChild(createField('Email:', 'sEmail', savedTestAccount.email || '', 'email'));
         body.appendChild(createField('Customer ID:', 'sCid', savedTestAccount.customerId || ''));
 
-        // ★ GCS/MCS Link Selector in Test Account Settings
         const gcsSelector = buildGcsLinkSelector(
-            'settingsGcsContainer',
-            'sGcs',
-            'sGcsType',
-            savedTestAccount.gcsLink || '',
-            savedTestAccount.gcsLinkType || ''
+            'settingsGcsContainer', 'sGcs', 'sGcsType',
+            savedTestAccount.gcsLink || '', savedTestAccount.gcsLinkType || ''
         );
         body.appendChild(gcsSelector);
 
         const notice = document.createElement('div');
         notice.style.cssText = `padding:8px;background:#d4edda;border-radius:6px;margin-bottom:15px;font-size:10px;color:#155724;border:1px solid #c3e6cb`;
-        notice.textContent = '🔒 Passwords are NOT stored or transmitted for security. Use your org\'s credential manager.';
+        notice.textContent = '🔒 Passwords are NOT stored or transmitted for security.';
         body.appendChild(notice);
 
         const btnRow = document.createElement('div'); btnRow.style.cssText = `display:flex;gap:10px`;
@@ -1753,11 +1662,13 @@ const GCS_MCS_OPTIONS = [
         cancelBtn.onclick = () => modal.remove();
         saveBtn.onclick = () => {
             const gcsTypeSelect = modal.querySelector('#sGcsType');
+            const gcsUrl = modal.querySelector('#sGcs')?.value.trim() || '';
+            const gcsTypeVal = gcsTypeSelect ? gcsTypeSelect.value : '';
             saveTestAccount({
                 email: modal.querySelector('#sEmail').value.trim(),
                 customerId: modal.querySelector('#sCid').value.trim(),
-                gcsLink: getGcsLinkFromSelector('settingsGcsContainer', 'sGcs', 'sGcsType'),
-                gcsLinkType: gcsTypeSelect ? gcsTypeSelect.value : ''
+                gcsLink: gcsUrl,
+                gcsLinkType: gcsTypeVal
             });
             modal.remove();
             showNotification('Saved!', 'success');
@@ -1776,7 +1687,7 @@ const GCS_MCS_OPTIONS = [
     }
 
     // ════════════════════════════════════════════════════════
-    //  ★ REVIEW MODAL (with Custom HVA + GCS/MCS Selector)
+    //  REVIEW MODAL
     // ════════════════════════════════════════════════════════
     function openReviewModal(responseData) {
         if (!responseData) return;
@@ -1822,7 +1733,6 @@ const GCS_MCS_OPTIONS = [
         h3.appendChild(envSpan);
         h3.appendChild(document.createTextNode(` #${sNo}`));
         headerInfo.appendChild(h3);
-
         const subInfo = document.createElement('p');
         subInfo.style.cssText = `margin:5px 0 0;font-size:11px;opacity:0.85`;
         subInfo.textContent = `${chatEntry.testerLogin} | ${chatEntry.testingDate} | ${chatEntry.responseTimeFormatted}`;
@@ -1924,8 +1834,7 @@ const GCS_MCS_OPTIONS = [
 
         const botBox = document.createElement('div');
         const bLabel = document.createElement('strong'); bLabel.textContent = 'Bot:'; botBox.appendChild(bLabel);
-        const bValue = document.createElement('div');
-        bValue.style.cssText = `background:#e8f5e9;padding:8px;border-radius:4px;margin-top:3px;max-height:80px;overflow-y:auto`;
+        const bValue = document.createElement('div');        bValue.style.cssText = `background:#e8f5e9;padding:8px;border-radius:4px;margin-top:3px;max-height:80px;overflow-y:auto`;
         bValue.textContent = chatEntry.preProdBotResponse; botBox.appendChild(bValue); autoGrid.appendChild(botBox);
 
         autoSection.appendChild(autoGrid);
@@ -1939,7 +1848,7 @@ const GCS_MCS_OPTIONS = [
         assessH4.textContent = 'Assessment';
         assessSection.appendChild(assessH4);
 
-        // ★ HVA Select with Custom Input
+        // HVA Select with Custom Input
         const hvaWidget = buildHvaSelector('hvaSelect', 'customHvaInput');
         assessSection.appendChild(hvaWidget);
 
@@ -1958,10 +1867,10 @@ const GCS_MCS_OPTIONS = [
             lbl.appendChild(inp); lbl.appendChild(document.createTextNode(` ${value}`)); return lbl;
         };
 
-      radioRow.appendChild(createRadio('Correct', '#d4edda', '#28a745', '#155724'));
-radioRow.appendChild(createRadio('Incorrect', '#f8d7da', '#dc3545', '#721c24'));
-statusWrap.appendChild(radioRow);
-assessSection.appendChild(statusWrap);
+        radioRow.appendChild(createRadio('Correct', '#d4edda', '#28a745', '#155724'));
+        radioRow.appendChild(createRadio('Incorrect', '#f8d7da', '#dc3545', '#721c24'));
+        statusWrap.appendChild(radioRow);
+        assessSection.appendChild(statusWrap);
 
         // Ground Truth
         const gtWrap = document.createElement('div'); gtWrap.style.marginBottom = '15px';
@@ -2017,24 +1926,19 @@ assessSection.appendChild(statusWrap);
 
         testGrid.appendChild(createTestField('Email:', 'testEmail', savedTestAccount.email || '', 'email'));
         testGrid.appendChild(createTestField('Customer ID:', 'testCustomerId', savedTestAccount.customerId || ''));
-
         testSection.appendChild(testGrid);
 
-        // ★ GCS/MCS Link Selector in Review Modal (full width below the grid)
+        // GCS/MCS Link Selector in Review Modal
         const gcsReviewSelector = buildGcsLinkSelector(
-            'reviewGcsContainer',
-            'gcsLink',
-            'gcsLinkType',
-            savedTestAccount.gcsLink || '',
-            savedTestAccount.gcsLinkType || ''
+            'reviewGcsContainer', 'gcsLink', 'gcsLinkType',
+            savedTestAccount.gcsLink || '', savedTestAccount.gcsLinkType || ''
         );
         gcsReviewSelector.style.marginTop = '12px';
         testSection.appendChild(gcsReviewSelector);
 
-        // Security notice
         const testNotice = document.createElement('div');
         testNotice.style.cssText = `padding:6px;background:#fff3cd;border-radius:4px;font-size:9px;color:#856404;text-align:center;border:1px solid #ffeeba;margin-top:10px`;
-        testNotice.textContent = '🔒 Passwords are never stored or sent. Use your org credential manager.';
+        testNotice.textContent = '🔒 Passwords are never stored or sent.';
         testSection.appendChild(testNotice);
 
         bodyDiv.appendChild(testSection);
@@ -2068,7 +1972,7 @@ assessSection.appendChild(statusWrap);
 
         setTimeout(() => pasteZone.focus(), 100);
 
-        // ★ Validation helper — uses resolved HVA value
+        // Validation helper
         const updateSaveBtn = () => {
             const hvaVal = getHvaValue('hvaSelect', 'customHvaInput');
             const ok = pastedImageData && hvaVal && modal.querySelector('input[name="responseStatus"]:checked');
@@ -2130,7 +2034,7 @@ assessSection.appendChild(statusWrap);
             pasteZone.focus();
         };
 
-        // ★ Validation listeners — HVA select, custom input, and status radios
+        // Validation listeners
         const hvaSelect = modal.querySelector('#hvaSelect');
         const customHvaInput = modal.querySelector('#customHvaInput');
         if (hvaSelect) hvaSelect.onchange = updateSaveBtn;
@@ -2143,7 +2047,7 @@ assessSection.appendChild(statusWrap);
         // Skip from modal
         skipFromModalBtn.onclick = () => { pastedImageData = null; pastedImageInfo = null; modal.remove(); skipCurrentResponse(); };
 
-        // ★ SAVE — uses resolved HVA and GCS values
+        // ★ SAVE HANDLER — separated GCS type and URL
         saveBtn.onclick = async () => {
             const hva = getHvaValue('hvaSelect', 'customHvaInput');
             const status = modal.querySelector('input[name="responseStatus"]:checked')?.value;
@@ -2151,14 +2055,18 @@ assessSection.appendChild(statusWrap);
 
             saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
 
+            // Get GCS/MCS type and URL SEPARATELY
+            const gcsLinkUrl = getGcsLinkFromSelector('reviewGcsContainer', 'gcsLink', 'gcsLinkType');
+            const gcsLinkTypeLabel = getGcsLinkTypeLabel('gcsLinkType', 'reviewGcsContainer');
+            const gcsTypeSelectVal = modal.querySelector('#gcsLinkType')?.value || '';
+
             // Save test account if checked
             if (saveAccCheck.checked) {
-                const gcsTypeSelect = modal.querySelector('#gcsLinkType');
                 saveTestAccount({
                     email: modal.querySelector('#testEmail').value.trim(),
                     customerId: modal.querySelector('#testCustomerId').value.trim(),
-                    gcsLink: getGcsLinkFromSelector('reviewGcsContainer', 'gcsLink', 'gcsLinkType'),
-                    gcsLinkType: gcsTypeSelect ? gcsTypeSelect.value : ''
+                    gcsLink: gcsLinkUrl,
+                    gcsLinkType: gcsTypeSelectVal
                 });
             }
 
@@ -2188,7 +2096,7 @@ assessSection.appendChild(statusWrap);
                 entryId,
                 environment: env.label,
                 environmentId: env.id,
-                hva: truncateString(hva, 255),  // ★ Resolved HVA (could be custom text)
+                hva: truncateString(hva, 255),
                 messageId: chatEntry.messageId,
                 conversationId: chatEntry.conversationId,
                 query: chatEntry.query,
@@ -2202,7 +2110,8 @@ assessSection.appendChild(statusWrap);
                 imageOriginalWidth: pastedImageInfo?.originalWidth || 800,
                 imageOriginalHeight: pastedImageInfo?.originalHeight || 600,
                 imageFileSize: pastedImageInfo?.fileSize || 0,
-                gcsLink: truncateString(getGcsLinkFromSelector('reviewGcsContainer', 'gcsLink', 'gcsLinkType'), 500),  // ★ Resolved GCS link
+                gcsLinkType: truncateString(gcsLinkTypeLabel, 255),
+                gcsLink: truncateString(gcsLinkUrl, 500),
                 testAccountEmail: truncateString(modal.querySelector('#testEmail').value.trim(), 255),
                 testAccountCustomerId: truncateString(modal.querySelector('#testCustomerId').value.trim(), 255),
                 testingDate: chatEntry.testingDate,
@@ -2326,7 +2235,8 @@ assessSection.appendChild(statusWrap);
         if (env.hasAreaOfImprovement) cols.push({ header: 'Area of Improvement', key: 'areaOfImprovement', width: 45 });
         cols.push(
             { header: 'Screenshot Ref', key: 'screenshotRef', width: 25 },
-            { header: 'GCS Link', key: 'gcsLink', width: 30 },
+            { header: 'Link Type', key: 'linkType', width: 12 },
+            { header: 'GCS/MCS Link', key: 'gcsLink', width: 35 },
             { header: 'Test Email', key: 'testEmail', width: 25 },
             { header: 'Test Customer ID', key: 'testCustId', width: 22 },
             { header: 'Testing Date', key: 'testDate', width: 14 },
@@ -2359,7 +2269,9 @@ assessSection.appendChild(statusWrap);
                 botResponse: item.preProdBotResponse, responseTime: item.responseTimeFormatted,
                 status: item.responseCorrectOrIncorrect, groundTruth: item.groundTruthResponse || '',
                 observations: item.observations || '', screenshotRef: ref,
-                gcsLink: item.gcsLink || '', testEmail: item.testAccountEmail || '',
+                linkType: item.gcsLinkType || '',
+                gcsLink: item.gcsLink || '',
+                testEmail: item.testAccountEmail || '',
                 testCustId: item.testAccountCustomerId || '', testDate: item.testingDate,
                 tester: item.testerLogin, queryTime: item.queryLocalTime || '', savedTime: item.savedLocalTime || ''
             };
@@ -2699,7 +2611,7 @@ assessSection.appendChild(statusWrap);
                     const raw = localStorage.getItem(key);
                     if (raw) { try { const parsed = JSON.parse(raw); if (!parsed._enc && Array.isArray(parsed)) data = parsed; } catch {} }
                 }
-                              const correct = data.filter(d => d.responseCorrectOrIncorrect === 'Correct').length;
+                const correct = data.filter(d => d.responseCorrectOrIncorrect === 'Correct').length;
                 const incorrect = data.filter(d => d.responseCorrectOrIncorrect === 'Incorrect').length;
                 stats[eid] = {
                     total: data.length, correct, incorrect,
@@ -2724,7 +2636,6 @@ assessSection.appendChild(statusWrap);
         const container = document.createElement('div');
         container.style.cssText = `background:#fff;width:800px;max-width:95vw;border-radius:12px;overflow:hidden`;
 
-        // Header
         const header = document.createElement('div');
         header.style.cssText = `background:linear-gradient(135deg,#232F3E,#37475A);color:#fff;padding:15px 20px;display:flex;justify-content:space-between;align-items:center`;
         const headerInfo = document.createElement('div');
@@ -2736,7 +2647,6 @@ assessSection.appendChild(statusWrap);
         closeBtn.textContent = '✕'; closeBtn.onclick = () => modal.remove();
         header.appendChild(headerInfo); header.appendChild(closeBtn); container.appendChild(header);
 
-        // Cards
         const cardsRow = document.createElement('div');
         cardsRow.style.cssText = `padding:20px;display:flex;gap:15px;flex-wrap:wrap`;
 
@@ -2773,17 +2683,15 @@ assessSection.appendChild(statusWrap);
             cardBody.appendChild(createStatRow('☁ SP Synced:', s.spOk, '#0078d4'));
             if (s.spFail > 0) cardBody.appendChild(createStatRow('⚠ SP Failed:', s.spFail, '#dc3545'));
 
-            // List name
             const listInfo = document.createElement('div');
             listInfo.style.cssText = `border-top:1px solid #dee2e6;padding-top:10px;margin-top:10px;text-align:center`;
             const listLabel = document.createElement('div'); listLabel.style.cssText = `font-size:9px;color:#888;word-break:break-all`;
             listLabel.textContent = `List: ${getListNameForEnv(eid)}`; listInfo.appendChild(listLabel);
             cardBody.appendChild(listInfo);
 
-            // Action button
             if (!isActive && allowed) {
                 const switchBtn = document.createElement('button');
-                switchBtn.className = 'dash-switch-btn'; switchBtn.setAttribute('data-env', eid);
+                switchBtn.setAttribute('data-env', eid);
                 switchBtn.style.cssText = `width:100%;margin-top:10px;padding:8px;background:${env.gradient};color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:11px`;
                 switchBtn.textContent = `Switch to ${env.shortLabel}`;
                 switchBtn.onclick = () => { modal.remove(); switchEnvironment(eid); };
@@ -2803,11 +2711,10 @@ assessSection.appendChild(statusWrap);
 
         container.appendChild(cardsRow);
 
-        // Footer
         const footerDiv = document.createElement('div');
         footerDiv.style.cssText = `padding:10px 20px 15px;text-align:center;border-top:1px solid #dee2e6`;
         const secInfo = document.createElement('div'); secInfo.style.cssText = `font-size:9px;color:#666;margin-bottom:8px`;
-        secInfo.textContent = '🔒 v8.1 Secured: AES-256 encrypted storage | No passwords stored or transmitted | Scoped network interception';
+        secInfo.textContent = '🔒 v8.1 Secured: AES-256 encrypted storage | No passwords stored or transmitted';
         footerDiv.appendChild(secInfo);
         const closeBottom = document.createElement('button');
         closeBottom.style.cssText = `padding:8px 30px;background:#6c757d;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:bold`;
@@ -2889,7 +2796,6 @@ assessSection.appendChild(statusWrap);
 
         loadSavedTestAccount();
 
-        // Restore or auto-detect environment
         const savedEnv = localStorage.getItem(GLOBAL_KEYS.activeEnv);
         const detectedEnv = autoDetectEnvironment();
 
@@ -2900,10 +2806,8 @@ assessSection.appendChild(statusWrap);
         }
         localStorage.setItem(GLOBAL_KEYS.activeEnv, activeEnvId);
 
-        // Get username first (needed for encryption key)
         await showUsernamePrompt();
 
-        // Load encrypted data for active environment
         await loadQueueFromStorage();
         await loadDataFromStorage();
 
@@ -2916,7 +2820,6 @@ assessSection.appendChild(statusWrap);
         const fc = chatData.filter(d => d._spUploaded === false).length;
         const env = getActiveEnv();
 
-        // Auto-retry failed on startup (with delay)
         if (fc > 0 && getAutoUpload()) {
             setTimeout(async () => {
                 showNotification(`[${env.shortLabel}] Retrying ${fc} failed uploads...`, 'info');
@@ -2932,14 +2835,12 @@ assessSection.appendChild(statusWrap);
             showNotification(`Welcome ${currentUsername}! [${env.label}] Ready.`, 'success');
         }
 
-        // Show auto-detect notice
         if (detectedEnv) {
             setTimeout(() => {
                 showNotification(`Auto-detected: ${env.label} environment`, 'info');
             }, 2000);
         }
 
-        // Show security notice on first run
         const secNoticeKey = 'chatScraper_secNoticeShown_v81';
         if (!localStorage.getItem(secNoticeKey)) {
             setTimeout(() => {
@@ -2949,12 +2850,10 @@ assessSection.appendChild(statusWrap);
         }
     });
 
-    // Save on tab close
     window.addEventListener('beforeunload', () => {
         cleanupOnExit();
     });
 
-    // Handle visibility change (mobile/tab switching)
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
             saveQueueToStorage();
@@ -2962,13 +2861,11 @@ assessSection.appendChild(statusWrap);
         }
     });
 
-    // Periodic auto-save (every 30s)
     setInterval(() => {
         if (chatData.length > 0 || responseQueue.length > 0) {
             saveQueueToStorage();
             saveDataToStorage();
         }
-        // Refresh upload lock if we hold it
         const existing = localStorage.getItem(uploadLockKey);
         if (existing) {
             try {
@@ -2981,7 +2878,6 @@ assessSection.appendChild(statusWrap);
         }
     }, 30000);
 
-    // Clear stale upload locks on init
     try {
         const existing = localStorage.getItem(uploadLockKey);
         if (existing) {
