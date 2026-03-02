@@ -220,11 +220,14 @@
     // ════════════════════════════════════════════════════════
     function getActiveEnv() { return ENVIRONMENTS[activeEnvId] || ENVIRONMENTS['pre-prod']; }
 
-    function getListNameForEnv(envId) {
-        const env = ENVIRONMENTS[envId] || ENVIRONMENTS['pre-prod'];
-        const now = new Date();
-        return `${env.listPrefix}_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, '0')}`;
-    }
+   function getListNameForEnv(envId) {
+    const env = ENVIRONMENTS[envId] || ENVIRONMENTS['pre-prod'];
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${env.listPrefix}_${year}_${month}_${day}`;
+}
 
     function getSPListUrl() { return getActiveEnv().siteUrl; }
     function getSPListName() { return getListNameForEnv(activeEnvId); }
