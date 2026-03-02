@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Multi-Env Chat Scraper v8.1 (Secured)
-// @version      8.1.2
+// @version      8.1.2.1
 // @description  chat scraper and upload the data to sharepoint after assessment
 // @author       bsv
 // @match        https://pre-prod.amazon.com/*
