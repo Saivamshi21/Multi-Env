@@ -2298,101 +2298,529 @@
         return await wb.xlsx.writeBuffer();
     }
 
-    // ════════════════════════════════════════════════════════
-    //  NETWORK INTERCEPTION
-    // ════════════════════════════════════════════════════════
-    const EXCLUDED_URLS = [
-        /login/i, /auth/i, /oauth/i, /token/i, /signin/i, /password/i, /credential/i, /saml/i,
-        /\.css/i, /\.js(\?|$)/i, /\.png/i, /\.jpg/i, /\.gif/i, /\.svg/i, /\.woff/i,
-        /analytics/i, /tracking/i, /telemetry/i, /sharepoint\.com/i, /microsoftonline/i, /contextinfo/i
-    ];
+  // ════════════════════════════════════════════════════════
+//  NETWORK INTERCEPTION (FULL-RESPONSE CAPTURE)
+// ════════════════════════════════════════════════════════
 
-    function shouldIntercept(url) {
-        if (!url || typeof url !== 'string') return false;
-        if (EXCLUDED_URLS.some(p => p.test(url))) return false;
-        const lower = url.toLowerCase();
-        return lower.includes('chat') || lower.includes('message') || lower.includes('conversation') ||
-               lower.includes('bot') || lower.includes('assist') || lower.includes('query') || lower.includes('copilot');
+const EXCLUDED_URLS = [
+    /login/i, /auth/i, /oauth/i, /token/i, /signin/i, /password/i,
+    /credential/i, /saml/i,
+    /\.css/i, /\.js(\?|$)/i, /\.png/i, /\.jpg/i, /\.gif/i,
+    /\.svg/i, /\.woff/i,
+    /analytics/i, /tracking/i, /telemetry/i,
+    /sharepoint\.com/i, /microsoftonline/i, /contextinfo/i
+];
+
+function shouldIntercept(url) {
+    if (!url || typeof url !== 'string') return false;
+    if (EXCLUDED_URLS.some(p => p.test(url))) return false;
+    const lower = url.toLowerCase();
+    return (
+        lower.includes('chat') || lower.includes('message') ||
+        lower.includes('conversation') || lower.includes('bot') ||
+        lower.includes('assist') || lower.includes('query') ||
+        lower.includes('copilot') || lower.includes('completions') ||
+        lower.includes('generate') || lower.includes('respond')
+    );
+}
+
+// ─── Deep extraction: walks any JSON shape to find the full message ───
+function extractMessageFromObject(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+
+    // 1. Direct top-level string fields (most common)
+    const TOP_FIELDS = [
+        'response', 'message', 'botMessage', 'botResponse',
+        'answer', 'text', 'output', 'reply', 'content',
+        'generated_text', 'result', 'body', 'fulfillmentText',
+        'outputText', 'completion', 'assistantMessage',
+        'bot_response', 'bot_message', 'assistant_response'
+    ];
+    for (const f of TOP_FIELDS) {
+        if (typeof obj[f] === 'string' && obj[f].trim()) return obj[f];
     }
 
-    const onBotResponse = debounce(data => {
-        if (!isValidMessage(data.userMessage) || !isValidMessage(data.botMessage)) return;
-        addToQueue(data);
-        showNotification(`[${getActiveEnv().shortLabel}] Bot response! (${data.responseTimeFormatted}) | Queue: ${responseQueue.length}`, 'success');
-    }, 150);
+    // 2. OpenAI / Azure-style:  choices[].message.content  or  choices[].delta.content
+    if (Array.isArray(obj.choices) && obj.choices.length) {
+        const parts = [];
+        for (const c of obj.choices) {
+            const t =
+                c?.message?.content || c?.delta?.content ||
+                c?.text || c?.message?.text || '';
+            if (t) parts.push(t);
+        }
+        if (parts.length) return parts.join('');
+    }
 
-    const origXHROpen = XMLHttpRequest.prototype.open;
-    const origXHRSend = XMLHttpRequest.prototype.send;
+    // 3. Nested "message" object  →  message.content / message.text / message.body
+    if (obj.message && typeof obj.message === 'object') {
+        const m = obj.message;
+        const v = m.content || m.text || m.body || m.value ||
+                  m.response || m.answer || m.output || '';
+        if (v) return v;
+    }
 
-    XMLHttpRequest.prototype.open = function (m, u, ...r) {
-        Object.defineProperty(this, '_scraperUrl', { value: u, writable: true, enumerable: false, configurable: true });
-        return origXHROpen.apply(this, [m, u, ...r]);
-    };
+    // 4. Nested "data" wrapper  →  data.message / data.response / data.text
+    if (obj.data) {
+        if (typeof obj.data === 'string' && obj.data.trim()) return obj.data;
+        if (typeof obj.data === 'object') {
+            const d = obj.data;
+            const v = d.message || d.response || d.text || d.content ||
+                      d.answer || d.output || d.reply || d.body || '';
+            if (typeof v === 'string' && v.trim()) return v;
+            // deeper: data.message.content
+            if (v && typeof v === 'object') {
+                return v.content || v.text || v.body || '';
+            }
+        }
+    }
 
-    XMLHttpRequest.prototype.send = function (body) {
-        if (this._scraperUrl && shouldIntercept(this._scraperUrl)) {
+    // 5. Nested "result" wrapper
+    if (obj.result && typeof obj.result === 'object') {
+        const r = obj.result;
+        const v = r.message || r.response || r.text || r.content ||
+                  r.answer || r.output || r.reply || '';
+        if (typeof v === 'string' && v.trim()) return v;
+    }
+
+    // 6. Nested "payload" wrapper
+    if (obj.payload) {
+        if (typeof obj.payload === 'string' && obj.payload.trim()) return obj.payload;
+        if (typeof obj.payload === 'object') {
+            const p = obj.payload;
+            const v = p.message || p.response || p.text || p.content || '';
+            if (typeof v === 'string' && v.trim()) return v;
+        }
+    }
+
+    // 7. Array of messages → take last assistant/bot entry
+    if (Array.isArray(obj.messages) && obj.messages.length) {
+        for (let i = obj.messages.length - 1; i >= 0; i--) {
+            const m = obj.messages[i];
+            if (m && (m.role === 'assistant' || m.role === 'bot' ||
+                      m.sender === 'bot' || m.type === 'bot')) {
+                const v = m.content || m.text || m.message || m.body || '';
+                if (v) return v;
+            }
+        }
+        // fallback: last message regardless of role
+        const last = obj.messages[obj.messages.length - 1];
+        if (last) {
+            const v = last.content || last.text || last.message || last.body || '';
+            if (v) return v;
+        }
+    }
+
+    return null;
+}
+
+function extractMessageId(obj) {
+    if (!obj || typeof obj !== 'object') return 'N/A';
+    return (
+        obj.messageId || obj.message_id || obj.id ||
+        obj.responseId || obj.response_id ||
+        obj.data?.messageId || obj.data?.id ||
+        obj.message?.id || obj.result?.id ||
+        'N/A'
+    );
+}
+
+/**
+ * Parse the FULL bot response from raw response text.
+ * Handles:  plain JSON · SSE (data: …) · NDJSON · chunked JSON arrays
+ */
+function extractFullBotResponse(rawText) {
+    if (!rawText || typeof rawText !== 'string') return null;
+
+    const trimmed = rawText.trim();
+
+    // ── 1.  Try plain JSON parse ──────────────────────────
+    try {
+        const obj = JSON.parse(trimmed);
+        const msg = extractMessageFromObject(obj);
+        if (msg) return { message: msg, id: extractMessageId(obj), parsed: obj };
+    } catch { /* not plain JSON – continue */ }
+
+    // ── 2.  SSE / NDJSON  (data: {...}\ndata: {...}\n…) ───
+    const lines = trimmed.split('\n');
+    let accumulated = '';
+    let lastParsedObj = null;
+    let lastId = 'N/A';
+
+    for (let raw of lines) {
+        let line = raw.trim();
+        if (!line) continue;
+
+        // Strip SSE "data:" prefix
+        if (line.startsWith('data:')) line = line.substring(5).trim();
+        // Skip SSE done markers
+        if (line === '[DONE]' || line === 'event: done' ||
+            line === 'event:done') continue;
+        // Skip SSE event-type lines
+        if (line.startsWith('event:')) continue;
+        // Skip SSE id/retry lines
+        if (line.startsWith('id:') || line.startsWith('retry:')) continue;
+
+        try {
+            const chunk = JSON.parse(line);
+            lastParsedObj = chunk;
+
+            // Grab message-id from any chunk that has one
+            const cid = extractMessageId(chunk);
+            if (cid !== 'N/A') lastId = cid;
+
+            // --- Delta / streaming token approach ---
+            const delta =
+                chunk?.choices?.[0]?.delta?.content ||
+                chunk?.delta?.content ||
+                chunk?.delta?.text ||
+                chunk?.token?.text ||
+                chunk?.chunk ||
+                chunk?.text ||
+                chunk?.content ||
+                chunk?.response ||
+                chunk?.message?.content ||
+                chunk?.data?.content ||
+                chunk?.data?.text ||
+                '';
+            if (delta) { accumulated += delta; continue; }
+
+            // --- Full-message in this chunk (non-streaming) ---
+            const full = extractMessageFromObject(chunk);
+            if (full) { accumulated += full; continue; }
+        } catch {
+            // Not JSON – might be a plain-text streaming line
+            // Only add if it looks like real content (not markup/noise)
+            if (line.length > 0 && !line.startsWith('{') && !line.startsWith('<')) {
+                accumulated += line + ' ';
+            }
+        }
+    }
+
+    if (accumulated.trim()) {
+        return {
+            message: accumulated.trim(),
+            id: lastId,
+            parsed: lastParsedObj
+        };
+    }
+
+    // ── 3.  Bracket-wrapped JSON array  [{ … }, { … }] ───
+    if (trimmed.startsWith('[')) {
+        try {
+            const arr = JSON.parse(trimmed);
+            if (Array.isArray(arr)) {
+                let combined = '';
+                for (const item of arr) {
+                    const m = extractMessageFromObject(item);
+                    if (m) combined += m;
+                }
+                if (combined.trim()) {
+                    return {
+                        message: combined.trim(),
+                        id: extractMessageId(arr[arr.length - 1]),
+                        parsed: arr
+                    };
+                }
+            }
+        } catch { /* not a JSON array */ }
+    }
+
+    // ── 4.  Concatenated JSON objects  {...}{...}{...} ────
+    const jsonObjects = trimmed.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
+    if (jsonObjects && jsonObjects.length > 1) {
+        let combined = '';
+        let lid = 'N/A';
+        for (const js of jsonObjects) {
             try {
+                const obj = JSON.parse(js);
+                const m = extractMessageFromObject(obj);
+                if (m) combined += m;
+                const mid = extractMessageId(obj);
+                if (mid !== 'N/A') lid = mid;
+            } catch {}
+        }
+        if (combined.trim()) {
+            return { message: combined.trim(), id: lid, parsed: null };
+        }
+    }
+
+    // ── 5.  Last resort: if text looks like content, use it ──
+    if (trimmed.length > 5 && trimmed.length < LIMITS.MAX_STRING_LENGTH &&
+        !trimmed.startsWith('<') && !trimmed.startsWith('{')) {
+        return { message: trimmed, id: 'N/A', parsed: null };
+    }
+
+    return null;
+}
+
+// ─── Debounced handler ────────────────────────────────────
+const onBotResponse = debounce(data => {
+    if (!isValidMessage(data.userMessage) ||
+        !isValidMessage(data.botMessage)) return;
+    addToQueue(data);
+    showNotification(
+        `[${getActiveEnv().shortLabel}] Bot response! ` +
+        `(${data.responseTimeFormatted}) | Queue: ${responseQueue.length}`,
+        'success'
+    );
+}, 150);
+
+// ─── XHR Interception ─────────────────────────────────────
+const origXHROpen = XMLHttpRequest.prototype.open;
+const origXHRSend = XMLHttpRequest.prototype.send;
+
+XMLHttpRequest.prototype.open = function (m, u, ...r) {
+    Object.defineProperty(this, '_scraperUrl', {
+        value: u, writable: true, enumerable: false, configurable: true
+    });
+    Object.defineProperty(this, '_scraperMethod', {
+        value: m, writable: true, enumerable: false, configurable: true
+    });
+    return origXHROpen.apply(this, [m, u, ...r]);
+};
+
+XMLHttpRequest.prototype.send = function (body) {
+    if (this._scraperUrl && shouldIntercept(this._scraperUrl)) {
+        // ── Capture the outgoing user message ──
+        try {
+            if (body && typeof body === 'string') {
                 const r = JSON.parse(body);
                 pendingRequest = {
-                    conversationId: truncateString(r.conversationId || r.conversation_id || r.sessionId || 'N/A', 255),
-                    userMessage: truncateString(r.message || r.userMessage || r.query || r.text || r.input || r.prompt || 'N/A'),
+                    conversationId: truncateString(
+                        r.conversationId || r.conversation_id ||
+                        r.sessionId || r.session_id ||
+                        r.threadId || r.thread_id || 'N/A', 255
+                    ),
+                    userMessage: truncateString(
+                        r.message || r.userMessage || r.query ||
+                        r.text || r.input || r.prompt ||
+                        r.user_message || r.question ||
+                        r.utterance || r.request || 'N/A'
+                    ),
                     timestamp: new Date().toISOString(),
                     requestStartTime: performance.now()
                 };
-            } catch {}
+            }
+        } catch {}
 
-            this.addEventListener('load', function () {
-                if (this.status >= 200 && this.status < 300 && pendingRequest) {
-                    try {
-                        const t = performance.now(); const rt = t - pendingRequest.requestStartTime;
-                        const res = JSON.parse(this.responseText);
-                        onBotResponse({
-                            ...pendingRequest,
-                            messageId: truncateString(res.messageId || res.message_id || res.id || 'N/A', 255),
-                            botMessage: truncateString(res.response || res.message || res.botMessage || res.botResponse || res.answer || res.text || res.output || res.reply || 'N/A'),
-                            responseTime: rt, responseTimeFormatted: formatResponseTime(rt)
-                        });
-                        pendingRequest = null;
-                    } catch {}
-                }
-            });
-        }
-        return origXHRSend.apply(this, arguments);
-    };
+        // ── Use readystatechange to get the COMPLETE response ──
+        this.addEventListener('readystatechange', function () {
+            // readyState 4 = DONE → full response is available
+            if (this.readyState !== 4) return;
+            if (this.status < 200 || this.status >= 300) return;
+            if (!pendingRequest) return;
 
-    const origFetch = window.fetch;
-    window.fetch = function (...args) {
-        const url = typeof args[0] === 'string' ? args[0] : args[0]?.url;
-        if (url && shouldIntercept(url)) {
-            const opts = args[1] || {}; const st = performance.now();
             try {
+                const endTime = performance.now();
+                const rt = endTime - pendingRequest.requestStartTime;
+                const fullText = this.responseText || '';
+
+                if (!fullText.trim()) return;
+
+                const extracted = extractFullBotResponse(fullText);
+                if (!extracted || !extracted.message) {
+                    SecureLog.warn(
+                        'Could not extract bot message from XHR response ' +
+                        `(${fullText.length} chars, url: ${(this._scraperUrl || '').substring(0, 80)})`
+                    );
+                    return;
+                }
+
+                onBotResponse({
+                    ...pendingRequest,
+                    messageId: truncateString(extracted.id || 'N/A', 255),
+                    botMessage: truncateString(extracted.message),
+                    responseTime: rt,
+                    responseTimeFormatted: formatResponseTime(rt)
+                });
+                pendingRequest = null;
+            } catch (e) {
+                SecureLog.error('XHR response processing error', e);
+            }
+        });
+    }
+    return origXHRSend.apply(this, arguments);
+};
+
+// ─── Fetch Interception ───────────────────────────────────
+const origFetch = window.fetch;
+
+window.fetch = function (...args) {
+    const url = typeof args[0] === 'string' ? args[0] : args[0]?.url;
+
+    if (url && shouldIntercept(url)) {
+        const opts = args[1] || {};
+        const startTime = performance.now();
+
+        // ── Capture the outgoing user message ──
+        try {
+            if (opts.body && typeof opts.body === 'string') {
                 const r = JSON.parse(opts.body);
                 pendingRequest = {
-                    conversationId: truncateString(r.conversationId || r.conversation_id || r.sessionId || 'N/A', 255),
-                    userMessage: truncateString(r.message || r.userMessage || r.query || r.text || r.input || r.prompt || 'N/A'),
+                    conversationId: truncateString(
+                        r.conversationId || r.conversation_id ||
+                        r.sessionId || r.session_id ||
+                        r.threadId || r.thread_id || 'N/A', 255
+                    ),
+                    userMessage: truncateString(
+                        r.message || r.userMessage || r.query ||
+                        r.text || r.input || r.prompt ||
+                        r.user_message || r.question ||
+                        r.utterance || r.request || 'N/A'
+                    ),
                     timestamp: new Date().toISOString(),
-                    requestStartTime: st
+                    requestStartTime: startTime
                 };
-            } catch {}
-            return origFetch.apply(this, args).then(response => {
-                const et = performance.now();
-                response.clone().json().then(res => {
+            }
+        } catch {}
+
+        return origFetch.apply(this, args).then(async response => {
+            if (!pendingRequest) return response;
+            if (!response.ok) return response;
+
+            const endTime = performance.now();
+            const rt = endTime - pendingRequest.requestStartTime;
+            const contentType = (response.headers.get('content-type') || '').toLowerCase();
+
+            // Clone so the original consumer still gets the body
+            const clone = response.clone();
+
+            // Use an async IIFE so we don't block the return
+            (async () => {
+                try {
+                    let fullText = '';
+
+                    // ── Handle streaming (SSE / event-stream) ──
+                    if (contentType.includes('text/event-stream') ||
+                        contentType.includes('stream')) {
+                        const reader = clone.body?.getReader();
+                        if (reader) {
+                            const decoder = new TextDecoder();
+                            let done = false;
+                            while (!done) {
+                                const { value, done: d } = await reader.read();
+                                done = d;
+                                if (value) fullText += decoder.decode(value, { stream: !done });
+                            }
+                        } else {
+                            fullText = await clone.text();
+                        }
+                    }
+                    // ── Handle NDJSON ──
+                    else if (contentType.includes('ndjson') ||
+                             contentType.includes('x-ndjson')) {
+                        fullText = await clone.text();
+                    }
+                    // ── Handle regular JSON or text ──
+                    else {
+                        fullText = await clone.text();
+                    }
+
+                    if (!fullText.trim()) return;
+
+                    const extracted = extractFullBotResponse(fullText);
+                    if (!extracted || !extracted.message) {
+                        SecureLog.warn(
+                            'Could not extract bot message from fetch response ' +
+                            `(${fullText.length} chars, url: ${(url || '').substring(0, 80)})`
+                        );
+                        return;
+                    }
+
                     if (pendingRequest) {
-                        const rt = et - pendingRequest.requestStartTime;
                         onBotResponse({
                             ...pendingRequest,
-                            messageId: truncateString(res.messageId || res.message_id || res.id || 'N/A', 255),
-                            botMessage: truncateString(res.response || res.message || res.botMessage || res.botResponse || res.answer || res.text || res.output || res.reply || 'N/A'),
-                            responseTime: rt, responseTimeFormatted: formatResponseTime(rt)
+                            messageId: truncateString(extracted.id || 'N/A', 255),
+                            botMessage: truncateString(extracted.message),
+                            responseTime: rt,
+                            responseTimeFormatted: formatResponseTime(rt)
                         });
                         pendingRequest = null;
                     }
-                }).catch(() => {});
-                return response;
+                } catch (e) {
+                    SecureLog.error('Fetch response processing error', e);
+                }
+            })();
+
+            return response;
+        });
+    }
+
+    return origFetch.apply(this, args);
+};
+
+// ─── EventSource (SSE) Interception for pure SSE bots ─────
+const origEventSource = window.EventSource;
+if (origEventSource) {
+    window.EventSource = function (url, config) {
+        const es = new origEventSource(url, config);
+
+        if (shouldIntercept(url)) {
+            let accumulated = '';
+            let lastId = 'N/A';
+            const sseStart = performance.now();
+
+            es.addEventListener('message', (event) => {
+                try {
+                    const data = event.data?.trim();
+                    if (!data || data === '[DONE]') return;
+
+                    const chunk = JSON.parse(data);
+                    const delta =
+                        chunk?.choices?.[0]?.delta?.content ||
+                        chunk?.delta?.content ||
+                        chunk?.delta?.text ||
+                        chunk?.token?.text ||
+                        chunk?.text ||
+                        chunk?.content ||
+                        chunk?.response ||
+                        chunk?.message?.content ||
+                        '';
+                    if (delta) accumulated += delta;
+
+                    const mid = extractMessageId(chunk);
+                    if (mid !== 'N/A') lastId = mid;
+                } catch {}
             });
+
+            // When the stream closes, push the full message
+            const pushFinal = () => {
+                if (accumulated.trim() && pendingRequest) {
+                    const rt = performance.now() - sseStart;
+                    onBotResponse({
+                        ...pendingRequest,
+                        messageId: truncateString(lastId, 255),
+                        botMessage: truncateString(accumulated.trim()),
+                        responseTime: rt,
+                        responseTimeFormatted: formatResponseTime(rt)
+                    });
+                    pendingRequest = null;
+                    accumulated = '';
+                }
+            };
+
+            es.addEventListener('error', pushFinal);
+            es.addEventListener('close', pushFinal);
+
+            // Fallback: if no close/error fires, check periodically
+            let idleTimer = null;
+            const origOnMessage = es.onmessage;
+            const resetIdle = () => {
+                if (idleTimer) clearTimeout(idleTimer);
+                idleTimer = setTimeout(pushFinal, 3000);
+            };
+            es.addEventListener('message', resetIdle);
         }
-        return origFetch.apply(this, args);
+
+        return es;
     };
+    // Preserve prototype
+    window.EventSource.prototype = origEventSource.prototype;
+    window.EventSource.CONNECTING = origEventSource.CONNECTING;
+    window.EventSource.OPEN = origEventSource.OPEN;
+    window.EventSource.CLOSED = origEventSource.CLOSED;
+}
 
     // ════════════════════════════════════════════════════════
     //  EXCEL DOWNLOAD
